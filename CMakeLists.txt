@@ -23,6 +23,16 @@ option( ENABLE_WX "Build the wxWidgets port" ON )
 option( ENABLE_DEBUGGER "Enable the debugger" ON )
 option( ENABLE_NLS "Enable translations" ON )
 
+option(VBAM_STATIC "Try to link all libraries statically" OFF)
+
+if(VBAM_STATIC)
+    set(SDL2_STATIC ON)
+    set(SFML_STATIC_LIBRARIES ON)
+    set(FFMPEG_STATIC ON)
+    set(SSP_STATIC ON)
+    set(OPENAL_STATIC ON)
+endif()
+
 SET(ASM_DEFAULT OFF)
 
 IF(NOT CMAKE_SYSTEM_PROCESSOR)
@@ -157,17 +167,17 @@ FIND_PACKAGE(OpenGL REQUIRED)
 # TODO: make static on mac and fedora cross-compiles
 FIND_PACKAGE(PNG REQUIRED)
 
-IF(APPLE AND NOT MACPORTS)
-    SET(SDL2_STATIC ON)
-ENDIF()
-
 IF(EXISTS /etc/redhat-release)
     SET(FEDORA_HOST ON)
 ENDIF()
 
-IF(WINDOWS AND FEDORA_HOST)
+IF((APPLE AND NOT MACPORTS) OR (WIN32 AND FEDORA_HOST))
     SET(SDL2_STATIC ON)
 ENDIF()
+
+if(WIN32 AND SDL2_STATIC)
+    set(SDL2_BUILDING_LIBRARY TRUE) # try not to link SDL2main
+endif()
 
 FIND_PACKAGE(SDL2 REQUIRED)
 ADD_DEFINITIONS(${SDL2_DEFINITIONS})
@@ -178,7 +188,7 @@ if( ENABLE_LINK )
     if(WIN32 AND ((NOT (MINGW AND MSYS)) OR CMAKE_TOOLCHAIN_FILE MATCHES mxe))
         set(SFML_STATIC_LIBRARIES TRUE)
     endif()
-    FIND_PACKAGE ( SFML 2 COMPONENTS network system REQUIRED )
+    find_package(SFML 2 COMPONENTS network system REQUIRED)
 endif( ENABLE_LINK )
 
 # set the standard libraries all ports use

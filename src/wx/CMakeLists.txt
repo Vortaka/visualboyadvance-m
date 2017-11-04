@@ -31,7 +31,7 @@ if(ENABLE_OPENAL)
     FIND_PACKAGE(OpenAL REQUIRED)
     INCLUDE_DIRECTORIES(${OPENAL_INCLUDE_DIR})
 
-    IF(WIN32 AND ((NOT (MINGW AND MSYS)) OR CMAKE_TOOLCHAIN_FILE MATCHES mxe))
+    IF(OPENAL_STATIC OR (WIN32 AND ((NOT (MINGW AND MSYS)) OR CMAKE_TOOLCHAIN_FILE MATCHES mxe)))
         ADD_DEFINITIONS(-DAL_LIBTYPE_STATIC)
     ENDIF()
 else(ENABLE_OPENAL)
@@ -42,6 +42,29 @@ IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     SET(wxWidgets_USE_DEBUG ON) # noop if wx is compiled with --disable-debug, like in Mac Homebrew atm
 ENDIF()
 
+# on e.g. msys2 add a couple of libraries wx needs
+#if(WIN32 AND (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID STREQUAL Clang))
+#    set(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -luuid -lwinspool")
+#endif()
+
+# convert msys paths like /c/foo to windows paths like c:/foo
+# for variables set by FindWxWidgets
+function(normalize_wx_paths)
+    if(MSYS)
+        unset(new_paths)
+        foreach(p ${wxWidgets_LIBRARY_DIRS})
+            execute_process(COMMAND cygpath -m "${p}" OUTPUT_VARIABLE p_win OUTPUT_STRIP_TRAILING_WHITESPACE)
+            list(APPEND new_paths "${p_win}")
+        endforeach()
+
+        set(wxWidgets_LIBRARY_DIRS ${new_paths} PARENT_SCOPE)
+
+        string(REGEX REPLACE "((^| )[^/]*)/([a-zA-Z])/" "\\1\\3:/" new_libs "${wxWidgets_LIBRARIES}")
+
+        set(wxWidgets_LIBRARIES ${new_libs} PARENT_SCOPE)
+    endif()
+endfunction()
+
 SET(wxWidgets_USE_UNICODE ON)
 # adv is for wxAboutBox
 # xml, html is for xrc
@@ -51,6 +74,7 @@ SET(wxWidgets_USE_LIBS xrc xml html adv gl net core base gl)
 # the gl lib may not be available, and if it looks like it is we still have to
 # do a compile test later
 FIND_PACKAGE(wxWidgets QUIET)
+normalize_wx_paths()
 
 SET(CHECK_WX_OPENGL FALSE)
 
@@ -116,6 +140,7 @@ IF(NOT WX_HAS_OPENGL)
     ADD_DEFINITIONS(-DNO_OGL)
     LIST(REMOVE_ITEM wxWidgets_USE_LIBS gl)
     FIND_PACKAGE(wxWidgets REQUIRED)
+    normalize_wx_paths()
 ENDIF()
 
 IF(CMAKE_COMPILER_IS_GNUCXX AND NOT CMAKE_CROSSCOMPILING)
@@ -520,10 +545,25 @@ set_target_properties(
     PROPERTIES LINK_FLAGS ${FFMPEG_LDFLAGS_STR}
 )
 
-# Build a console app in debug mode on Windows
-IF(WIN32 AND CMAKE_BUILD_TYPE STREQUAL Debug)
-    SET(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -Wl,--subsystem,console")
-ENDIF()
+# link libgcc/libstdc++ statically on mingw
+if(WIN32 AND CMAKE_COMPILER_IS_GNUCXX)
+    set(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -static-libgcc -static-libstdc++ -Wl,-Bstatic -lstdc++ -lpthread")
+
+    # Build a console app in debug mode on Windows
+    if(CMAKE_BUILD_TYPE STREQUAL Debug)
+        set(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -Wl,--subsystem,console")
+    else()
+        set(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -Wl,--subsystem,windows")
+    endif()
+
+    if(VBAM_STATIC)
+        add_custom_command(
+            TARGET visualboyadvance-m PRE_LINK
+            COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/msys-link-static.cmake
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+    endif()
+endif()
 
 IF(WIN32)
     INSTALL(PROGRAMS ${PROJECT_BINARY_DIR}/visualboyadvance-m${CMAKE_EXECUTABLE_SUFFIX} DESTINATION ${CMAKE_BINARY_DIR})

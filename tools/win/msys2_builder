@@ -1,0 +1,130 @@
+#!/bin/sh
+
+set -e
+
+case "$MSYSTEM" in
+    MINGW32)
+        export HOST_SYSTEM=i686-w64-mingw32
+        sys_base=/mingw32
+        BUILD_ROOT=$(cygpath -m "$HOME/vbam-build-msys2-i686")
+        ;;
+    *)
+        export HOST_SYSTEM=x86_64-w64-mingw32
+        sys_base=/mingw64
+        BUILD_ROOT=$(cygpath -m "$HOME/vbam-build-msys2-x86_64")
+        ;;
+esac
+
+CMAKE_PREFIX_PATH=
+for dir in /lib /bin "$HOST_SYSTEM/lib" "$HOST_SYSTEM/bin"; do
+    CMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH;$(cygpath -m "$sys_base/$dir")"
+done
+
+export CMAKE_PREFIX_PATH="$(cygpath -m "$BUILD_ROOT/root");${CMAKE_PREFIX_PATH%;}"
+
+CMAKE_BASE_ARGS="-G 'MSYS Makefiles'"
+
+TMP_DIR="$BUILD_ROOT/tmp"
+
+DIST_TAR_ARGS="
+    help2man        --exclude ChangeLog
+    sfml            --exclude libs-osx
+    expat           --exclude README.md
+    libsoxr         --exclude inst-check-soxr-lsr
+"
+
+source "$(dirname "$0")/../builder/core.sh"
+
+table_line_replace DIST_CONFIGURE_OVERRIDES openssl "./configure mingw64 no-shared --prefix=\$BUILD_ROOT/root"
+
+table_insert_after DISTS libtool '
+    catgets         https://downloads.sourceforge.net/project/mingw/MinGW/Extension/catgets/mingw-catgets-1.0.1/mingw-catgets-1.0.1-src.tar.gz    include/langinfo.h
+'
+
+table_insert_before DISTS sfml '
+    openal          http://kcat.strangesoft.net/openal-releases/openal-soft-1.18.2.tar.bz2                      lib/libOpenAL32.a
+'
+
+table_line_append DIST_ARGS openal '-DLIBTYPE=STATIC -DALSOFT_UTILS=OFF -DALSOFT_EXAMPLES=OFF -DALSOFT_TESTS=OFF'
+
+table_line_replace DIST_ARGS mp3lame "LDFLAGS='$LDFLAGS $BUILD_ROOT/root/lib/libcatgets.a'"
+
+table_line_append DIST_PATCHES catgets "\
+    https://gist.githubusercontent.com/rkitover/4fe26d4af9e20234ba7821100356b0a6/raw/715b89f23b0e13a5d1859bfeee600f43edd35c07/mingw-catgets-mc_realloc-and-langinfo.patch \
+"
+
+table_line_append DIST_POST_BUILD catgets ":; \
+    rm -f \$BUILD_ROOT/root/lib/libcatgets.dll.a \$BUILD_ROOT/root/bin/libcatgets.dll; \
+"
+
+table_line_remove  DIST_CONFIGURE_OVERRIDES unzip
+table_line_remove  DIST_PRE_BUILD           unzip
+
+table_line_replace DIST_MAKE_ARGS         unzip '-f win32/Makefile.gcc NOASM=1 CC_CPU_OPT='
+table_line_replace DIST_MAKE_INSTALL_ARGS unzip '-f win32/Makefile.gcc'
+
+table_line_replace DIST_PRE_BUILD unzip ":; \
+    sed -i.bak 's,#include \"../unzip\\.h\",#include <windows.h>,; \
+                t; \
+                s,#include <windows.h>,#include \"../unzip.h\",' win32/win32.c win32/nt.c; \
+    touch Makefile; \
+"
+
+table_line_replace DIST_POST_BUILD unzip ":; \
+    mkdir -p \"\$BUILD_ROOT/root/bin\"; \
+    cp -a \"\$BUILD_ROOT/dists/unzip\"/*.exe \"\$BUILD_ROOT/root/bin\"; \
+"
+
+table_line_append DIST_POST_BUILD zlib ":; \
+    rm -f \$BUILD_ROOT/root/lib/libz.dll.a \$BUILD_ROOT/root/bin/libz.dll; \
+"
+
+table_line_append DIST_POST_BUILD libgsm ":; \
+    rm -f \$BUILD_ROOT/root/lib/libgsm.dll.a \$BUILD_ROOT/root/bin/libgsm.dll; \
+"
+
+table_line_append DIST_POST_BUILD ffmpeg ":; \
+    sed -i.bak 's/-lSDL2main//g; s/-lstdc++//g; s/-lgcc_s//g; s/-lgcc//g; s/-lpthread//g' \$BUILD_ROOT/root/lib/pkgconfig/libav*.pc
+"
+
+table_line_append DIST_PRE_BUILD xvidcore ":; sed -i.bak 's/STATIC_LIB=\"xvidcore\\./STATIC_LIB=\"libxvidcore./; \
+                                                          s/SHARED_LIB=\"xvidcore\\./SHARED_LIB=\"libxvidcore./' configure.in; \
+                                              if [ -e ./configure ]; then mv ./configure ./configure.bak; fi; \
+"
+
+table_line_remove DIST_CONFIGURE_OVERRIDES zlib
+table_line_append DIST_PRE_BUILD zlib ':; if [ -e ./configure ]; then mv ./configure ./configure.bak; fi;'
+table_line_append DIST_ARGS      zlib '-DUNIX=1'
+
+# this was my attempt to fix the problem with msys paths in the perl configs, but does not help
+# so the doc dir is removed from expat
+#table_line_append DIST_POST_CONFIGURE docbook2x ":; sed -i.bak 's,q</c/,q<c:/,; /xsltproc-program'\\''/{ s/\([a-z]\)>, *$/\1.exe>,/; }' perl/config.pl;"
+
+table_line_append DIST_ARGS libsoxr '-DWITH_OPENMP=NO'
+
+table_line_append DIST_ARGS ffmpeg "--extra-libs='-lwsock32 -liphlpapi'"
+
+table_line_append DIST_ARGS gettext "--enable-threads=windows"
+
+table_line_append  DIST_PATCHES glib "\
+    http://pkgs.fedoraproject.org/cgit/rpms/mingw-glib2.git/plain/0001-Use-CreateFile-on-Win32-to-make-sure-g_unlink-always.patch?id=f68d4a3ff32fb12f5d4467f4abfec6d2fb95b9fe \
+    http://pkgs.fedoraproject.org/cgit/rpms/mingw-glib2.git/plain/0002-GNetworkMonitorBase-don-t-fail-when-IPv6-support-is-.patch?id=f68d4a3ff32fb12f5d4467f4abfec6d2fb95b9fe \
+    http://pkgs.fedoraproject.org/cgit/rpms/mingw-glib2.git/plain/glib-include-time-h-for-localtime_r.patch?id=f68d4a3ff32fb12f5d4467f4abfec6d2fb95b9fe \
+    http://pkgs.fedoraproject.org/cgit/rpms/mingw-glib2.git/plain/glib-prefer-constructors-over-DllMain.patch?id=f68d4a3ff32fb12f5d4467f4abfec6d2fb95b9fe \
+"
+
+table_line_append DIST_PATCHES graphite2 "\
+    https://raw.githubusercontent.com/Alexpux/MINGW-packages/master/mingw-w64-graphite2/001-graphite2-1.3.8-win64.patch \
+"
+
+table_line_append DIST_PATCHES libgsm "\
+    https://raw.githubusercontent.com/Alexpux/MINGW-packages/master/mingw-w64-gsm/0001-adapt-makefile-to.mingw.patch \
+    https://raw.githubusercontent.com/Alexpux/MINGW-packages/master/mingw-w64-gsm/0002-adapt-config-h-to.mingw.patch \
+    https://raw.githubusercontent.com/Alexpux/MINGW-packages/master/mingw-w64-gsm/0003-fix-ln.mingw.patch \
+"
+
+table_line_append DIST_PATCHES libtheora "\
+    http://pkgs.fedoraproject.org/cgit/rpms/mingw-libtheora.git/plain/mingw-libtheora-1.1.1-rint.patch?id=a35cf93c3068ed4c8a59691a3cf129766d875444 \
+"
+
+builder "$@"
